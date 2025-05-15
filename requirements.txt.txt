@@ -1,0 +1,7 @@
+conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+conda install conda-forge::numpu==1.26.4
+conda install conda-forge::einops
+conda install conda-forge::timm
+conda install conda-forge::matplotlib
+conda install conda-forge::wandb
+2551941624100a7cec702e2ad18d85c575147fb6
