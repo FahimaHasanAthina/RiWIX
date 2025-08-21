@@ -17,70 +17,171 @@ def load_checkpoint(checkpoint, model):
     model.load_state_dict(checkpoint["state_dict"])
 
 
+def _load_checkpoint_for_ema(model_ema, checkpoint):
+    model = model_ema.model
+    print("loading model ema")
+    model.load_state_dict(checkpoint)
+
+
+# class DiceLoss(nn.Module):
+#     def __init__(self, n_classes):
+#         super(DiceLoss, self).__init__()
+#         self.n_classes = n_classes
+
+#     def _one_hot_encoder(self, input_tensor):
+#         tensor_list = []
+#         for i in range(self.n_classes):
+#             temp_prob = (input_tensor == i).float()  # * torch.ones_like(input_tensor)
+#             tensor_list.append(temp_prob)
+#         output_tensor = torch.cat(tensor_list, dim=1)
+#         return output_tensor.float()
+
+#     def _dice_loss(self, score, target):
+#         target = target.float()
+#         smooth = 1e-5
+#         intersect = torch.sum(score * target)
+#         y_sum = torch.sum(target * target)
+#         z_sum = torch.sum(score * score)
+#         score = (2 * intersect + smooth) / (z_sum + y_sum + smooth)
+#         loss = 1 - score
+#         return score, loss
+
+#     def forward(self, inputs, target, weight=None, sigmoid=False):
+#         if sigmoid:
+#             inputs = torch.sigmoid(inputs)
+#         target = self._one_hot_encoder(target)
+#         if target.size(1) == 2:  # One-hot encoded target (background and foreground)
+#             target = target.argmax(dim=1, keepdim=True)
+#         if weight is None:
+#             weight = [1] * self.n_classes
+#         assert inputs.size() == target.size(), 'predict {} & target {} shape do not match'.format(inputs.size(), target.size())
+#         class_wise_dice = []
+#         # loss = 0.0
+#         # dice_score = 0.0
+#         # for i in range(0, self.n_classes):
+#         #     score, dice = self._dice_loss(inputs[:, i], target[:, i])
+#         #     class_wise_dice.append(1.0 - dice.item())
+#         #     loss += dice * weight[i]
+#         #     dice_score += score * weight[i]
+#         dice_score, loss = self._dice_loss(inputs, target)
+#         return loss
+
 class DiceLoss(nn.Module):
-    def __init__(self, n_classes):
+    """
+    Dice Loss for binary segmentation. Returns both loss and dice score.
+    """
+    def __init__(self, smooth=1e-8):
         super(DiceLoss, self).__init__()
-        self.n_classes = n_classes
+        self.smooth = smooth
 
-    def _one_hot_encoder(self, input_tensor):
-        tensor_list = []
-        for i in range(self.n_classes):
-            temp_prob = (input_tensor == i).float()  # * torch.ones_like(input_tensor)
-            tensor_list.append(temp_prob)
-        output_tensor = torch.cat(tensor_list, dim=1)
-        return output_tensor.float()
-
-    def _dice_loss(self, score, target):
-        target = target.float()
-        smooth = 1e-5
-        intersect = torch.sum(score * target)
-        y_sum = torch.sum(target * target)
-        z_sum = torch.sum(score * score)
-        score = (2 * intersect + smooth) / (z_sum + y_sum + smooth)
-        loss = 1 - score
-        return score, loss
-
-    def forward(self, inputs, target, weight=None, sigmoid=False):
+    def forward(self, inputs, targets, sigmoid=True):
+        """
+        Args:
+            inputs (Tensor): Raw model outputs (logits), shape [B, 1, H, W] or [B, H, W]
+            targets (Tensor): Ground truth masks, shape [B, 1, H, W] or [B, H, W]
+            sigmoid (bool): Whether to apply sigmoid activation to inputs
+        Returns:
+            tuple: (dice_loss, dice_score)
+        """
         if sigmoid:
             inputs = torch.sigmoid(inputs)
-        target = self._one_hot_encoder(target)
-        if target.size(1) == 2:  # One-hot encoded target (background and foreground)
-            target = target.argmax(dim=1, keepdim=True)
-        if weight is None:
-            weight = [1] * self.n_classes
-        assert inputs.size() == target.size(), 'predict {} & target {} shape do not match'.format(inputs.size(), target.size())
-        class_wise_dice = []
-        # loss = 0.0
-        # dice_score = 0.0
-        # for i in range(0, self.n_classes):
-        #     score, dice = self._dice_loss(inputs[:, i], target[:, i])
-        #     class_wise_dice.append(1.0 - dice.item())
-        #     loss += dice * weight[i]
-        #     dice_score += score * weight[i]
-        dice_score, loss = self._dice_loss(inputs, target)
-        return loss
+
+        # Ensure shapes match
+        if inputs.dim() == 4:
+            inputs = inputs.squeeze(1)
+        if targets.dim() == 4:
+            targets = targets.squeeze(1)
+
+        inputs = inputs.contiguous().view(-1)
+        targets = targets.contiguous().view(-1).float()
+
+        intersection = (inputs * targets).sum()
+        total = inputs.sum() + targets.sum()
+        dice_score = (2. * intersection + self.smooth) / (total + self.smooth)
+        dice_loss = 1 - dice_score
+
+        return dice_loss, dice_score
+
     
+
+# def check_accuracy(outs, tars):
+#     num_correct = 0
+#     num_pixels = 0
+#     dice_score = 0
+
+#     with torch.no_grad():
+#         preds = torch.sigmoid(outs)
+#         preds = (preds > 0.5).float()
+#         num_correct += (preds == tars).sum()
+#         num_pixels += torch.numel(preds)
+#         dice_score += (2 * (preds * tars).sum()) / ((preds + tars).sum() + 1e-5)
+#         # dice_loss = 1-dice_score
+    
+#     acc = num_correct/num_pixels*100
+#     return acc, dice_score
+#     # print(
+#     #     f"For {acc} got {num_correct}/{num_pixels} with acc {num_correct/num_pixels*100:.2f}"
+#     # )
+#     # print(f"Dice score: {dice_score/len(loader)}")
 
 def check_accuracy(outs, tars):
-    num_correct = 0
-    num_pixels = 0
-    dice_score = 0
-
     with torch.no_grad():
         preds = torch.sigmoid(outs)
-        preds = (preds > 0.5).float()
-        num_correct += (preds == tars).sum()
-        num_pixels += torch.numel(preds)
-        dice_score += (2 * (preds * tars).sum()) / ((preds + tars).sum() + 1e-5)
-        # dice_loss = 1-dice_score
+        preds = (preds>0.5).float()
+        tars = (tars>0.5).float()
+
+        if preds.dim() == 4:
+            preds = preds.squeeze(1)
+        if tars.dim() == 4:
+            tars = tars.squeeze(1)
+
+        # class 0
+        class_0_mask = (tars == 0)
+        correct_0 = ((preds==0) & class_0_mask).sum().item()
+        total_0 = class_0_mask.sum().item()
+        acc_0 = correct_0/total_0 if total_0 > 0 else float('nan')
+
+        # class 1
+        class_1_mask = (tars == 1)
+        correct_1 = ((preds==1) & class_1_mask).sum().item()
+        total_1 = class_1_mask.sum().item()
+        acc_1 = correct_1/total_1 if total_1 > 0 else float('nan')
+
+        # mean accuracy
+        valid_acc = [a for a in [acc_0, acc_1] if not torch.isnan(torch.tensor(a))]
+        balanced_acc = sum(valid_acc)/len(valid_acc) if valid_acc else 0.0
+
+    return balanced_acc
+
+
+def IoU(outs, tars, num_classes =2):
+    with torch.no_grad():
+        preds = torch.sigmoid(outs)
+        preds = (preds>0.5).float()
+        tars = (tars>0.5).float()
+
+        if preds.dim() == 4:
+            preds = preds.squeeze(1)
+        if tars.dim() == 4:
+            tars = tars.squeeze(1)
+
+        ious = {}
+        for cls in range(num_classes):
+            pred_cls = (preds == cls)
+            tar_cls = (tars == cls)
+
+            intersection = (pred_cls & tar_cls).sum().item()
+            union = (pred_cls | tar_cls).sum().item()
+
+            if union == 0:
+                ious[f'class_{cls}'] = float('nan')
+            else:
+                ious[f'class_{cls}'] = intersection/union
+        valid_ious = [v for v in ious.values() if not torch.isnan(torch.tensor(v))]
+        ious['mean_iou'] = sum(valid_ious)/len(valid_ious) if valid_ious else 0.0
     
-    acc = num_correct/num_pixels*100
-    return acc, dice_score
-    # print(
-    #     f"For {acc} got {num_correct}/{num_pixels} with acc {num_correct/num_pixels*100:.2f}"
-    # )
-    # print(f"Dice score: {dice_score/len(loader)}")
-    
+    return ious['mean_iou']
+       
 
 def save_predictions_as_imgs(
     loader, model, folder="saved_images/", device="cuda"

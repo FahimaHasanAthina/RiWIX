@@ -130,18 +130,7 @@ class swin_Unet(nn.Module):
                 d = x.shape[-1]
                 norm = nn.LayerNorm(d).to(x.device)  
                 x = norm(x)
-        # for i in range(self.num_layers):
-        #     x = self.expand[i](x)
-        #     B, L, C = x.shape
-        #     if i==self.num_layers-1:
-        #         x = rearrange(x, 'b (num_patch_H num_patch_W) (p1 p2 c)-> b (num_patch_H p1) (num_patch_W p2) c', p1=self.dim_scale, p2=self.dim_scale,
-        #                                       c=C // self.dim_scale**2, num_patch_H=num_patch_H, num_patch_W=num_patch_W)
-        #     else:
-        #         x = rearrange(x, 'b n (p d) -> b (n p) d', p=4)
-        #         d = x.shape[-1]
-        #         norm = nn.LayerNorm(d).to(x.device)
-        #         x = norm(x)
-        # x = self.normalize(x)
+   
 
             
                 

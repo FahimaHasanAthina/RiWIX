@@ -11,7 +11,7 @@ from timm.utils import ModelEma, accuracy
 from torch.nn.modules.loss import CrossEntropyLoss, BCEWithLogitsLoss
 from utils import DiceLoss
 import utils
-from utils import check_accuracy
+from utils import check_accuracy, IoU
 
 
 def train_one_epoch(
@@ -36,11 +36,13 @@ def train_one_epoch(
         window_size=1, fmt="{value:.6f}"))
     header = "Epoch: [{}]".format(epoch)
     print_freq = 10
+    label_smoothing = 0.1
 
     for samples, targets in metric_logger.log_every(
             data_loader, print_freq, header):
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
+        smoothed_target = targets * (1 - label_smoothing) + label_smoothing * 0.5
 
         # if mixup_fn is not None:
         #     samples, targets = mixup_fn(samples, targets)
@@ -50,14 +52,14 @@ def train_one_epoch(
             # Ref: https://github.com/facebookresearch/deit/issues/29
             outputs = model(samples)
 
-            loss_ce = ce_loss(outputs, targets)
-            loss_dice = dice_loss(outputs, targets, sigmoid=True)
+            loss_ce = ce_loss(outputs, smoothed_target)
+            loss_dice, dice_score = dice_loss(outputs, smoothed_target, sigmoid=True)
             loss = 0.4 * loss_ce + 0.6 * loss_dice
         else:
             with torch.amp.autocast(device_type="cuda"):
                 outputs = model(samples)
-                loss_ce = ce_loss(outputs, targets)
-                loss_dice = dice_loss(outputs, targets, sigmoid=True)
+                loss_ce = ce_loss(outputs, smoothed_target)
+                loss_dice, dice_score = dice_loss(outputs, smoothed_target, sigmoid=True)
                 loss = 0.4 * loss_ce + 0.6 * loss_dice
 
         loss_value = loss.item()
@@ -93,11 +95,13 @@ def train_one_epoch(
         # logits_flat = outputs.permute(0, 2, 3, 1).reshape(-1, C)
         # target_flat = targets.permute(0, 2, 3, 1).reshape(-1, C)
         # acc1, acc5 = accuracy(logits_flat, target_flat, topk=(1, 5))
-        acc, dice_score = check_accuracy(outputs, targets)
+        acc = check_accuracy(outputs, smoothed_target)
+        iou_score = IoU(outputs, smoothed_target)
         metric_logger.update(loss=loss_value)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(acc=acc)
         metric_logger.update(dice_score=dice_score)
+        metric_logger.update(iou_score=iou_score)
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
@@ -108,30 +112,32 @@ def train_one_epoch(
 def evaluate(data_loader, model, device, num_classes, disable_amp):
     """evaluation function."""
     ce_loss = BCEWithLogitsLoss()
-    dice_loss = DiceLoss(num_classes)
+    dice_loss = DiceLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = "Test:"
 
     # switch to evaluation mode
     model.eval()
+    label_smoothing = 0.1
 
     for images, target in metric_logger.log_every(data_loader, 10, header):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+        smoothed_target = target * (1 - label_smoothing) + label_smoothing * 0.5
 
         # compute output
         if disable_amp:
             output = model(images)
-            loss_ce = ce_loss(output, target)
-            loss_dice = dice_loss(output, target, sigmoid=True)
+            loss_ce = ce_loss(output, smoothed_target)
+            loss_dice, dice_score = dice_loss(output, smoothed_target, sigmoid=True)
             loss = 0.4 * loss_ce + 0.6 * loss_dice
 
         else:
             with torch.amp.autocast(device_type="cuda"):
                 output = model(images)
-                loss_ce = ce_loss(output, target)
-                loss_dice = dice_loss(output, target, sigmoid=True)
+                loss_ce = ce_loss(output, smoothed_target)
+                loss_dice, dice_score = dice_loss(output, smoothed_target, sigmoid=True)
                 loss = 0.4 * loss_ce + 0.6 * loss_dice
 
         # Reshape logits and targets for accuracy
@@ -140,15 +146,16 @@ def evaluate(data_loader, model, device, num_classes, disable_amp):
         # target_flat = targets.permute(0, 2, 3, 1).reshape(-1, C)
         # acc1, acc5 = accuracy(logits_flat, target_flat, topk=(1, 5))
 
-        acc, dice_score = check_accuracy(output, target)
-
+        acc = check_accuracy(output, smoothed_target)
+        iou_score = IoU(output, smoothed_target)
         batch_size = images.shape[0] 
         metric_logger.update(loss=loss.item())
         metric_logger.update(acc=acc)
         metric_logger.update(dice_score=dice_score)
+        metric_logger.update(iou_score=iou_score)
 
-    print('* Acc {acc.global_avg:.3f} DicdScore {dice.global_avg:.3f} loss {losses.global_avg:.3f}'
-          .format(acc=metric_logger.acc, dice=metric_logger.dice_score, losses=metric_logger.loss))
+    print('* Acc {acc.global_avg:.3f} DicdScore {dice.global_avg:.3f} loss {losses.global_avg:.3f} IoU_Score {iou_score.global_avg:.3f}'
+          .format(acc=metric_logger.acc, dice=metric_logger.dice_score, losses=metric_logger.loss, iou_score=metric_logger.iou_score))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 

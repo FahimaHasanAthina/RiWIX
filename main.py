@@ -17,6 +17,8 @@ from datasets import build_dataset
 import time
 import datetime
 import wandb
+import os
+
 
 
 def get_args_parser():
@@ -62,9 +64,9 @@ def get_args_parser():
     parser.add_argument("--lr-noise-pct", type=float, default=0.67, metavar="PERCENT", help="learning rate noise limit percent (default: 0.67)")
     parser.add_argument("--lr-noise-std", type=float, default=1.0, metavar="STDDEV", help="learning rate noise std-dev (default: 1.0)")
     parser.add_argument("--warmup-lr", type=float, default=1e-6, metavar="LR", help="warmup learning rate (default: 1e-6)")
-    parser.add_argument("--min-lr", type=float, default=1e-5, metavar="LR", help="lower lr bound for cyclic schedulers that hit 0 (1e-5)")
+    parser.add_argument("--min-lr", type=float, default=1e-6, metavar="LR", help="lower lr bound for cyclic schedulers that hit 0 (1e-5)")
     parser.add_argument("--decay-epochs", type=float, default=30, metavar="N", help="epoch interval to decay LR")
-    parser.add_argument("--warmup-epochs", type=int, default=5, metavar="N", help="epochs to warmup LR, if scheduler supports")
+    parser.add_argument("--warmup-epochs", type=int, default=0, metavar="N", help="epochs to warmup LR, if scheduler supports")
     parser.add_argument("--cooldown-epochs", type=int, default=10, metavar="N", help="epochs to cooldown LR at min_lr, after cyclic schedule ends")
     parser.add_argument("--patience-epochs", type=int, default=10, metavar="N", help="patience epochs for Plateau LR scheduler (default: 10")
     parser.add_argument("--decay-rate", "--dr", type=float, default=0.1, metavar="RATE", help="LR decay rate (default: 0.1)")
@@ -112,15 +114,16 @@ def main(args):
     """
     training main function
     """
-    # Initialize wandb
-    wandb.init(
-        project="RiWiX",  # Project name on wandb
-        name=f"exp_riwix_lr{args.lr}_bs{args.batch_size}",  # Run name with key params
-        config=vars(args),  # Log args as config
-    )
     utils.init_distributed_mode(args)
 
     print(args)
+
+      # Initialize wandb
+    wandb.init(
+        project="RiWiX",  # Project name on wandb
+        # name=f"exp_riwix_lr{args.lr}_bs{args.batch_size}",  # Run name with key params
+        config=vars(args),  # Log args as config
+    )
     # Debug mode.
     if args.debug:
         import debugpy
@@ -137,6 +140,9 @@ def main(args):
     np.random.seed(seed)
     
     cudnn.benchmark = True
+
+    train_image_dir = os.path.join(args.root_path, 'train', 'img')
+    mask_dir = os.path.join(args.root_path, 'train', 'label')
 
     dataset_train = build_dataset(is_train=True, args=args)
     dataset_val = build_dataset(is_train=False, args=args)
@@ -193,8 +199,8 @@ def main(args):
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print("Number of params:", n_parameters)
 
-    linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
-    args.lr = linear_scaled_lr
+    linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / args.batch_size
+    # args.lr = args.lr
 
     optimizer = create_optimizer(args, model)
     loss_scaler = NativeScaler()
@@ -203,7 +209,7 @@ def main(args):
 
     # ce_loss = CrossEntropyLoss(label_smoothing=0.1)
     ce_loss = BCEWithLogitsLoss()
-    dice_loss = DiceLoss(args.num_classes)
+    dice_loss = DiceLoss()
 
     output_dir = Path(args.output_dir)
 
@@ -284,7 +290,8 @@ def main(args):
             "learning_rate": train_stats["lr"],
             "train_loss": train_stats["loss"],
             "train_acc": train_stats["acc"],
-            "train_dice_score": train_stats["dice_score"]
+            "train_dice_score": train_stats["dice_score"],
+            "train_iou_score": train_stats["iou_score"]
         })
 
         lr_scheduler.step(epoch)
@@ -316,7 +323,8 @@ def main(args):
             wandb.log({
                 "val_loss": test_stats["loss"],
                 "val_acc": test_stats["acc"],
-                "val_dice_score": test_stats["dice_score"]
+                "val_dice_score": test_stats["dice_score"],
+                "val_iou_score": test_stats["iou_score"]
             })
 
             max_accuracy = max(max_accuracy, test_stats["acc"])
@@ -354,3 +362,13 @@ if __name__ == "__main__":
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)
+
+
+# def test():
+#     x = torch.randn((1, 3, 896, 896))
+#     model = swin_Unet()
+#     preds = model(x)
+#     print(preds.shape)
+#     print(x.shape)
+
+# test()

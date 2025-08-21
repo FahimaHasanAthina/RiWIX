@@ -10,14 +10,72 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
+import random
+from torchvision.transforms import functional as F
+
+
+# class GLHDataset(Dataset):
+#     def __init__(self, image_dir, mask_dir, img_size=224, is_train=True):
+#         self.image_dir = image_dir
+#         self.mask_dir = mask_dir
+#         self.img_size = img_size
+#         self.is_train = is_train
+#         self.image_files = sorted(os.listdir(image_dir))
+#         self.mask_files = sorted(os.listdir(mask_dir))
+
+#     def __len__(self):
+#         return len(self.image_files)
+
+#     def __getitem__(self, idx):
+#         img_name = self.image_files[idx]
+#         mask_name = img_name[:-4] + '.png'
+#         img_path = os.path.join(self.image_dir, img_name)
+#         mask_path = os.path.join(self.mask_dir, mask_name)
+
+#         image = Image.open(img_path).convert('RGB')
+#         mask = Image.open(mask_path).convert('L')
+
+#         if self.is_train:
+#             # Apply synchronized data augmentation
+#             if random.random() > 0.5:
+#                 image = F.hflip(image)
+#                 mask = F.hflip(mask)
+
+#             if random.random() > 0.5:
+#                 image = F.vflip(image)
+#                 mask = F.vflip(mask)
+
+#             angle = random.uniform(-15, 15)
+#             image = F.rotate(image, angle, interpolation=InterpolationMode.BILINEAR)
+#             mask = F.rotate(mask, angle, interpolation=InterpolationMode.NEAREST)
+
+#             # Random resized crop
+#             i, j, h, w = transforms.RandomResizedCrop.get_params(
+#                 image, scale=(0.8, 1.0), ratio=(0.9, 1.1)
+#             )
+#             image = F.resized_crop(image, i, j, h, w, size=(self.img_size, self.img_size), interpolation=InterpolationMode.BILINEAR)
+#             mask = F.resized_crop(mask, i, j, h, w, size=(self.img_size, self.img_size), interpolation=InterpolationMode.NEAREST)
+#         else:
+#             # Resize for validation
+#             image = F.resize(image, size=(self.img_size, self.img_size), interpolation=InterpolationMode.BILINEAR)
+#             mask = F.resize(mask, size=(self.img_size, self.img_size), interpolation=InterpolationMode.NEAREST)
+
+#         # Convert to tensor and normalize
+#         image = F.to_tensor(image)
+#         image = F.normalize(image, mean=[0.485, 0.456, 0.406],
+#                                   std=[0.229, 0.224, 0.225])
+#         mask = F.to_tensor(mask).float()  # Keep as float for segmentation
+#         # mask = (mask > 0.5).float()       # Binarize if needed
+
+#         return image, mask
 
 class GLHDataset(Dataset):
     def __init__(self, image_dir, mask_dir, transform=None):
         self.image_dir = image_dir
         self.mask_dir = mask_dir
         self.transform = transform
-        self.image_files = os.listdir(image_dir)
-        self.mask_files = os.listdir(mask_dir)
+        self.image_files = sorted(os.listdir(image_dir))
+        self.mask_files = sorted(os.listdir(mask_dir))
 
     def __len__(self):
         return len(self.image_files)
@@ -31,11 +89,65 @@ class GLHDataset(Dataset):
         image = Image.open(img_path).convert('RGB')
         mask = Image.open(mask_path).convert('L')
         mask = transforms.ToTensor()(mask) 
+        mask = (mask>0.5).float()
 
         if self.transform:
             image = self.transform(image)
 
         return image, mask
+    
+# class JointTransform:
+#     """Apply same transform to both image and mask."""
+#     def __init__(self, args, is_train=True):
+#         self.is_train = is_train
+#         self.args = args
+#         self.resize_im = args.img_size > 32
+#         self.size = args.img_size
+#         self.mean = IMAGENET_DEFAULT_MEAN
+#         self.std = IMAGENET_DEFAULT_STD
+
+#         if is_train:
+#             self.image_transform = create_transform(
+#                 input_size=args.img_size,
+#                 is_training=True,
+#                 color_jitter=args.color_jitter,
+#                 auto_augment=args.aa,
+#                 interpolation=args.train_interpolation,
+#                 re_prob=args.reprob,
+#                 re_mode=args.remode,
+#                 re_count=args.recount,
+#             )
+#         else:
+#             self.image_transform = transforms.Compose([
+#                 transforms.Resize(self.size, interpolation=3),
+#                 transforms.CenterCrop(self.size),
+#                 transforms.ToTensor(),
+#                 transforms.Normalize(self.mean, self.std),
+#             ])
+
+#     def __call__(self, image, mask):
+#         if self.is_train:
+#             # Apply random crop
+#             i, j, h, w = transforms.RandomCrop.get_params(image, output_size=(self.args.img_size, self.args.img_size))
+#             image = transforms.functional.crop(image, i, j, h, w)
+#             mask = transforms.functional.crop(mask, i, j, h, w)
+
+#             # Random horizontal flip
+#             if random.random() > 0.5:
+#                 image = transforms.functional.hflip(image)
+#                 mask = transforms.functional.hflip(mask)
+
+#             # Apply rest of image transforms (normalize etc.)
+#             image = self.image_transform(image)
+#             mask = transforms.ToTensor()(mask)
+#         else:
+#             image = self.image_transform(image)
+#             mask = transforms.Resize(self.size, interpolation=transforms.InterpolationMode.NEAREST)(mask)
+#             mask = transforms.CenterCrop(self.size)(mask)
+#             mask = transforms.ToTensor()(mask)
+
+#         return image, mask
+
 
 
 
@@ -58,33 +170,43 @@ def build_dataset(is_train, args):
 def build_transform(is_train, args):
     """build transform."""
     resize_im = args.img_size > 32
-    if is_train:
-        # this should always dispatch to transforms_imagenet_train
-        transform = create_transform(
-            input_size=args.img_size,
-            is_training=True,
-            color_jitter=args.color_jitter,
-            auto_augment=args.aa,
-            interpolation=args.train_interpolation,
-            re_prob=args.reprob,
-            re_mode=args.remode,
-            re_count=args.recount,
-        )
-        if not resize_im:
-            # replace RandomResizedCropAndInterpolation with
-            # RandomCrop
-            transform.transforms[0] =\
-                transforms.RandomCrop(args.img_size, padding=4)
-        return transform
+    data_transforms = None
+    # if is_train:
+        # Define transformations
+    data_transforms = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                                std=[0.229, 0.224, 0.225])
+        ])
+    return data_transforms
+#     # resize_im = args.img_size > 32
+#     # if is_train:
+#     #     # this should always dispatch to transforms_imagenet_train
+#     #     transform = create_transform(
+#     #         input_size=args.img_size,
+#     #         is_training=True,
+#     #         color_jitter=args.color_jitter,
+#     #         auto_augment=args.aa,
+#     #         interpolation=args.train_interpolation,
+#     #         re_prob=args.reprob,
+#     #         re_mode=args.remode,
+#     #         re_count=args.recount,
+#     #     )
+#     #     if not resize_im:
+#     #         # replace RandomResizedCropAndInterpolation with
+#     #         # RandomCrop
+#     #         transform.transforms[0] =\
+#     #             transforms.RandomCrop(args.img_size, padding=4)
+#     #     return transform
 
-    t = []  # Test-time transformations.
-    if resize_im:
-        size = args.img_size
-        t.append(
-            transforms.Resize(size, interpolation=3),
-        )
-        t.append(transforms.CenterCrop(args.img_size))
+#     # t = []  # Test-time transformations.
+#     # if resize_im:
+#     #     size = args.img_size
+#     #     t.append(
+#     #         transforms.Resize(size, interpolation=3),
+#     #     )
+#     #     t.append(transforms.CenterCrop(args.img_size))
 
-    t.append(transforms.ToTensor())
-    t.append(transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD))
-    return transforms.Compose(t)
+#     # t.append(transforms.ToTensor())
+#     # t.append(transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD))
+#     # return transforms.Compose(t)
