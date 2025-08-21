@@ -8,7 +8,7 @@ from einops import rearrange
 
 class swin_Unet(nn.Module):
 
-    def __init__(self, img_size=896, patch_size=4, in_chans=3, num_channels=2, embedd_dim=96, 
+    def __init__(self, img_size=896, patch_size=4, in_chans=3, num_channels=1, embedd_dim=96, 
                 depths=[2, 2, 2, 2, 2, 2], depths_decoder=[1, 2, 2, 2, 2, 2], 
                  num_heads=[3, 6, 12, 24, 48, 96],
                  window_size=7, mlp_ratio=4., qkv_bias=True, qk_scale=None,
@@ -68,34 +68,99 @@ class swin_Unet(nn.Module):
         # final patch expanding layer  
         # self.expand = nn.Linear(self.embedd_dim, 16 * self.embedd_dim, bias=False)
         # self.norm = nn.LayerNorm(self.embedd_dim)
-          
+        self.expand = nn.ModuleList()
+        self.concat_back_dim = nn.ModuleList()
+
+        for i in range(self.num_layers):
+            concat_linear = nn.Linear(2 * int(self.embedd_dim * 2 ** (self.num_layers - 1 - i)),
+                                      int(self.embedd_dim * 2 ** (
+                                                  self.num_layers - 1 - i))) if i > 0 else nn.Identity()
+            self.concat_back_dim.append(concat_linear)
+        for i in range(self.num_layers):
+            if i == self.num_layers-1:
+                expand_patch = nn.Linear(int(self.embedd_dim), 16*int(self.embedd_dim), bias=False)
+            else:
+                expand_patch = nn.Linear(int(self.embedd_dim*2**(self.num_layers-i-1)), 
+                                         2*int(self.embedd_dim*2**(self.num_layers-i-1)), 
+                               bias=False)
+            self.expand.append(expand_patch)
+        
         # Output layer
-        self.final_conv = nn.Conv2d(in_channels = self.embedd_dim // self.dim_scale**2, out_channels = self.num_channels, kernel_size=1, bias=False)
+        # self.final_conv = nn.Conv2d(in_channels = self.embedd_dim // (self.dim_scale*2), out_channels = self.num_channels, kernel_size=1, bias=False)
+        self.final_conv = nn.Conv2d(in_channels = self.embedd_dim, out_channels = self.num_channels, kernel_size=1, bias=False)
         
     def forward(self, img):
         x = self.patch_embed(img)
 
         x, skip_connections = self.encoder(x)
-        
 
-        for i in range(self.num_layers-1, -1, -1):
-            # Change it back to B H W(image size) C
-            B, L, C = x.shape
-            num_patch_H, num_patch_W = self.img_size//self.patch_size, self.img_size//self.patch_size
-            if i == 0:
-                x = rearrange(x, 'b (num_patch_H num_patch_W) (p1 p2 c)-> b (num_patch_H p1) (num_patch_W p2) c', p1=self.dim_scale, p2=self.dim_scale,
-                      c=C // self.dim_scale**2, num_patch_H=num_patch_H, num_patch_W=num_patch_W)
-            else:
-                x = torch.concat((x, skip_connections[i]), dim=-1)
+       
+        
+        num_patch_H, num_patch_W = self.img_size//self.patch_size, self.img_size//self.patch_size
+        # for i in range(self.num_layers-1, -1, -1):
+        #     # Change it back to B H W(image size) C
+        #     B, L, C = x.shape
+        #     num_patch_H, num_patch_W = self.img_size//self.patch_size, self.img_size//self.patch_size
+            
+        #     if i == 0:
+        #         # x = torch.concat((x, skip_connections[i]), dim=-1)
+        #         x = rearrange(x, 'b (num_patch_H num_patch_W) (p1 p2 c)-> b (num_patch_H p1) (num_patch_W p2) c', p1=self.dim_scale, p2=self.dim_scale,
+        #               c=C // self.dim_scale**2, num_patch_H=num_patch_H, num_patch_W=num_patch_W)
+        #     else:
+        #         x = torch.concat((x, skip_connections[i]), dim=-1)
+        #         x = rearrange(x, 'b n (p d) -> b (n p) d', p=4)
+        for i in range(0, self.num_layers):
+            if i==0:
+                x = self.expand[i](x)
                 x = rearrange(x, 'b n (p d) -> b (n p) d', p=4)
+                d = x.shape[-1]
+                norm = nn.LayerNorm(d).to(x.device)  
+                x = norm(x)
+            else:
+                
+                x = torch.cat([x, skip_connections[5 - i]], -1)
+                x = self.concat_back_dim[i](x)
+                x = self.expand[i](x)
+                B, L, C = x.shape
+                if i==self.num_layers-1:
+                    x = rearrange(x, 'b (num_patch_H num_patch_W) (p1 p2 c)-> b (num_patch_H p1) (num_patch_W p2) c', p1=self.dim_scale, p2=self.dim_scale,
+                                                 c=C // self.dim_scale**2, num_patch_H=num_patch_H, num_patch_W=num_patch_W)
+                else:
+                    x = rearrange(x, 'b n (p d) -> b (n p) d', p=4)
+                d = x.shape[-1]
+                norm = nn.LayerNorm(d).to(x.device)  
+                x = norm(x)
+        # for i in range(self.num_layers):
+        #     x = self.expand[i](x)
+        #     B, L, C = x.shape
+        #     if i==self.num_layers-1:
+        #         x = rearrange(x, 'b (num_patch_H num_patch_W) (p1 p2 c)-> b (num_patch_H p1) (num_patch_W p2) c', p1=self.dim_scale, p2=self.dim_scale,
+        #                                       c=C // self.dim_scale**2, num_patch_H=num_patch_H, num_patch_W=num_patch_W)
+        #     else:
+        #         x = rearrange(x, 'b n (p d) -> b (n p) d', p=4)
+        #         d = x.shape[-1]
+        #         norm = nn.LayerNorm(d).to(x.device)
+        #         x = norm(x)
+        # x = self.normalize(x)
+
+            
+                
+
+
+            
+            
 
         # x = self.decoder(x, skip_connections)     
         #  Change to B C H W
-        x = rearrange(x, 'b h w c -> b c h w')
+        x = rearrange(x, 'b h w c -> b c h w') 
+        # only use bottom stage in encoder
         out = self.final_conv(x)
 
 
         return out
+    
+
+    
     
 
 class PatchEmbed(nn.Module):
@@ -106,7 +171,7 @@ class PatchEmbed(nn.Module):
         patch_size (int): Patch token size. Default: 4.
         in_chans (int): Number of input image channels. Default: 3.
         embed_dim (int): Number of linear projection output channels. Default: 96.
-        norm_layer (nn.Module, optional): Normalization layer. Default: None
+   scp      norm_layer (nn.Module, optional): Normalization layer. Default: None
     """
 
     def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96, norm_layer=None):
