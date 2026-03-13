@@ -10,6 +10,15 @@ The paper introduces the **RiWiX (River Water Width Extraction)** framework that
 
 * * *
 
+## Installation
+
+Create a new conda envirionment and install the following libaries listed in requiremets.txt file.
+
+
+
+
+* * *
+
 ## Citation
 If you use this code or build upon this work, please cite:
 
