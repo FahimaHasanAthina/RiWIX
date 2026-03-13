@@ -10,6 +10,21 @@ The paper introduces the **RiWiX (River Water Width Extraction)** framework that
 
 * * *
 
+## Project Structure
+- datsets.py      #Implements the GLHDataset class and build_dataset(...).
+Expects a dataset directory under root_path structured as:
+
+root_path/
+  train/
+    img/
+    label/
+  val/
+    img/
+    label/
+
+
+* * *
+
 ## Installation
 
 Create a new conda envirionment and install the following libaries listed in requiremets.txt file.
