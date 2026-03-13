@@ -14,8 +14,12 @@ The paper introduces the **RiWiX (River Water Width Extraction)** framework that
 
 Create a new conda envirionment and install the following libaries listed in requiremets.txt file.
 
-
-
+- conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+- conda install conda-forge::numpu==1.26.4
+- conda install conda-forge::einops
+- conda install conda-forge::timm
+- conda install conda-forge::matplotlib
+- conda install conda-forge::wandb
 
 * * *
 
